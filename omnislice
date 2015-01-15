@@ -1,0 +1,273 @@
+#!/usr/bin/env ruby
+# Takes slices of an omnigraffle canvas.
+#
+# This takes an omnigraffle document and canvas name, asks Omnigraffle to export the canvas to a png, finds
+# all named objects in that canvas, and slices the exported image to generate an image corresponding to each
+# named object.
+#
+# omnislice.rb file.Graffle -c canvas-name -o output-dir
+#
+require "optparse"
+require "tempfile"
+require "shellwords"
+require "json"
+require "open3"
+
+# Returns the contents of the data.plist file as a JSON map.
+def convert_omni_to_json(path)
+  # Omnigraffles are either directories containing a data.plist + linked image assets, or they are simply a
+  # data.plist. I'm not sure why Omnigraffle decides to use either -- image assets are sometimes base64
+  # encoded inside the data.plist file, rather than being placed in a separate directory.
+  data_plist = path
+  if File.directory?(path)
+    data_plist = File.join(path, "data.plist")
+    raise "data.plist not found: #{data_plist}" unless File.exists?(data_plist)
+  end
+  temp = Tempfile.new("omni")
+  begin
+    # Omnigraffle gzips its plist file.
+    `gzcat #{Shellwords.escape(data_plist)} > #{Shellwords.escape(temp.path)}`
+    return JSON.parse(`plist-to-json #{Shellwords.escape(temp.path)}`)
+  ensure
+    temp.unlink
+  end
+end
+
+def get_canvas_index(canvas_name, doc)
+  canvas = doc["Sheets"]
+  canvas.each_with_index do |canvas, i|
+    name = canvas["SheetTitle"]
+    raise "Canvas #{i}'s title is nil" if name.nil?
+    return i if name == canvas_name
+  end
+  nil
+end
+
+# Returns all objects in a canvas which have a name.
+def find_named_objects(canvas)
+  # Each object looks something like this
+  # {
+  #       "Bounds": "{{416, 66}, {320, 50}}",
+  #       "Class": "ShapedGraphic",
+  #       "ID": 191531,
+  #       "Layer": 0,
+  #       "Name": "ad1",
+  #     },
+  #
+  # Groups have a "Graphics" sub-key.
+  # Some objects have a GraphicsList subkey (Canvases do; not sure if others do).
+  named_shapes = []
+  to_visit = canvas["ExportShapes"]
+  to_visit = canvas["GraphicsList"]
+  until to_visit.empty? do
+    current = to_visit.pop
+    named_shapes << current if current["Name"]
+    to_visit.concat(current["Graphics"]) if current["Graphics"]
+    to_visit.concat(current["GraphicsList"]) if current["GraphicsList"]
+  end
+  named_shapes
+end
+
+# Extracts the coordinates of object, slices that section from image_file, and saves it in output_folder
+# according to the object's name.
+def export_canvas_object(object, image_file, scale_factor, sharpen, output_folder)
+  coords, size = object_bounds(object)
+  x, y = coords.map(&:to_i)
+  w, h = size.map(&:to_i)
+  t = Tempfile.new("cropped")
+  output_file = File.join(output_folder, object["Name"] + ".png")
+
+  coords_string = "#{w*scale_factor}x#{h*scale_factor}+#{x*scale_factor}+#{y*scale_factor}"
+  # -repage removes the origin information from the image. You want those offsets removed if you're going to
+  # combine any of these images into an animated gif.
+  # NOTE(philc): This convert command invocation dominates the time spent when exporting each image.
+  # Using whole numbers rather than decimals (e.g. 10 rather than 10.0) shaves 10%.
+  # Using -extract rather than -crop shaves 50%.
+  command = "convert -extract #{coords_string} #{Shellwords.escape(image_file)} -repage 0x0 " +
+            "#{Shellwords.escape(t.path)}"
+  puts command
+  `#{command}`
+  scaled_file = (scale_factor == 1) ? t.path : scale_image(t.path, 1.0 / scale_factor, sharpen)
+  FileUtils.mv(scaled_file, output_file)
+  t.unlink
+end
+
+# Scales the image by the given fraction (0.5 is 50%) and returns the temp file of the new scaled image.
+def scale_image(file_path, fraction, sharpen)
+  temp = Tempfile.new("resized")
+  sharp = sharpen ? " -unsharp 0x1" : ""
+  `convert #{Shellwords.escape(file_path)} -resize #{fraction * 100}% #{sharp} #{Shellwords.escape(temp.path)}`
+  temp
+end
+
+# - object: an omnigraffle node of this form: { "Bounds": "{{416, 66}, {320, 50}}", ... }
+# Returns [[x, y], [width, height]]
+def object_bounds(object)
+  bounds_str = object["Bounds"]
+  raise "Object #{object} has no Bounds key." unless bounds_str
+  x, y = (bounds_str.match /{{(\d+), (\d+)}/)[1..2]
+  width, height = (bounds_str.match /{{.+}, {(\d+), (\d+)}}/)[1..2]
+  return [[x.to_f, y.to_f], [width.to_f, height.to_f]]
+end
+
+def run_applescript(script_contents)
+  command = "/usr/bin/osascript << EOT\n#{script_contents}\nEOT"
+  `#{command}`.strip
+end
+
+# Queries Omnigraffle via AppleScript for the file path of the currently opened doc.
+def get_current_doc_path
+  run_applescript <<HERE
+    tell application id "OGfl"
+      set currentDocument to document of front window
+      set p to path of currentDocument
+      do shell script "echo " & quoted form of p
+    end tell
+HERE
+end
+
+# Exports the named canvas at 2x resolution.
+def export_canvas_via_applescript(canvas_name, scale_factor, output_path)
+  File.delete(output_path) if File.exists?(output_path)
+
+  # References
+  # Due to App sandbox restrictions, you need to specify the output as a "POSIX file"
+  # http://forums.omnigroup.com/showthread.php?t=31062
+  # http://forums.omnigroup.com/showthread.php?t=24079
+  # Setting the export preferences:
+  # http://forums.omnigroup.com/showthread.php?t=22828
+  run_applescript <<HERE
+    tell application id "OGfl"
+      set currentDocument to document of front window
+      set p to path of currentDocument
+      set allCanvases to every canvas of currentDocument
+      set export scale of current export settings to #{scale_factor}
+      set canvasCount to count of canvases of currentDocument
+      set include border of current export settings to false
+      set area type of current export settings to current canvas
+      repeat with canvasNumber from 1 to canvasCount
+        set cName to name of canvas canvasNumber of currentDocument
+        set cName to cName as string
+        if cName = "#{canvas_name}"
+          save currentDocument in POSIX file "#{output_path}"
+          return
+        else
+        end if
+      end repeat
+    end tell
+HERE
+  unless File.exists?(output_path)
+    raise "Export of the canvas has failed, since no file weas generated exported here: #{output_path}."
+  end
+end
+
+# Saves the current document to disk.
+def save_document_via_applescript()
+  run_applescript <<HERE
+   tell application id "OGfl"
+     save front document
+    end tell
+HERE
+end
+
+$enable_debug_logging = true
+
+def log(*messages)
+  output_with_timestamp = Proc.new do |s|
+    puts Time.now.strftime("%Y-%m-%dT%H:%M:%S.%L: ") + s # 2014-01-17T01:18:42.123
+  end
+  puts_fn = $enable_debug_logging ? output_with_timestamp : method(:puts)
+
+  messages.each do |message|
+    puts_fn.call(message)
+  end
+end
+
+def run_script
+  opts = {:scale_factor => 1, :sharpen => false}
+  OptionParser.new do |parser|
+    parser.on("-h", "--help") do
+      puts parser
+      exit
+    end
+    parser.on("-o", "--output FILENAME [defaults to name of canvas]") do |v|
+      opts[:output] = v
+    end
+    parser.on("-c", "--canvas CANVAS_NAME") do |v|
+      opts[:canvas] = v
+    end
+    parser.on("-s", "--scale-factor integer", "How much to scale the images on export") do |v|
+      opts[:scale_factor] = v.to_i
+    end
+    parser.on(nil, "--[no-]sharpen") do |v|
+      opts[:sharpen] = v
+    end
+    parser.parse!
+  end
+
+  abort "You need this: npm install plist-to-json" if `which plist-to-json`.empty?
+  abort "You need the convert binary from imagemagick. brew install imagemagick" if `which convert`.empty?
+
+  omni_file = ARGV[0] || get_current_doc_path
+  unless omni_file
+    abort "No path to omnigraffle's currently focused canvas file could be extracted from Omnigraffle."
+  end
+
+  abort "File #{omni_file} not found" unless File.exists?(omni_file)
+
+  if opts[:output] && File.exists?(opts[:output])
+    abort "Output folder #{opts[:output]} is not a directory." unless File.directory?(opts[:output])
+  end
+
+  # We do this for two reasons:
+  # 1. We look in the file to detect the currently selected canvas. I couldn't figure out how to do that via
+  #    applescript.
+  # 2. We detect the shape geometry based on the contents of the omni file, and so that should be up-to-date
+  #    before we do any exporting.
+  save_document_via_applescript()
+
+  doc = convert_omni_to_json(omni_file)[0]
+
+  # If --canvas was passed, use that canvas. Otherwise use the currently selected canvas in the doc.
+  canvas = nil
+  canvas_index = nil
+  if opts[:canvas]
+    canvas_index = get_canvas_index(opts[:canvas], doc)
+    canvas = doc["Sheets"][canvas_index] unless canvas_index.nil?
+    abort "There was no canvas with the name #{opts[:canvas]}" if canvas.nil?
+  else
+    canvas_index = doc["WindowInfo"]["CurrentSheet"]
+    canvas = doc["Sheets"][canvas_index]
+  end
+
+  opts[:output] ||= canvas["SheetTitle"]
+  FileUtils.mkdir(opts[:output]) unless File.exists?(opts[:output])
+
+  begin
+    resized_file = nil
+    # NOTE(philc): Using Tempfile here caused problems -- when running my applescript, Omnigraffle said it
+    # lacked permissions to write to the location of the temp file /var/tmp...
+    temp_file_path = "/tmp/omni_export.png"
+    FileUtils.touch(temp_file_path)
+    exported_file = File.new(temp_file_path)
+
+    log "Exporting Omnigraffle canvas to disk."
+    # NOTE(philc): For image quality reasons, I export my Omnigraffle canvases as 200% images and then resize
+    # them with ImageMagick, which makes the text etc. much sharper than if Omnigraffle exported it at a lower
+    # resolution.
+    export_canvas_via_applescript(canvas["SheetTitle"], opts[:scale_factor], exported_file.path)
+
+    named_objects = find_named_objects(canvas).sort_by { |o| o["Name"] }
+    names = named_objects.map { |o| o["Name"] }
+    dupes = names.select { |n| names.count(n) > 1 }.uniq
+    abort "There are objects with duplicate names: #{dupes.join(",")}" unless dupes.empty?
+    named_objects.each do |o|
+      log "Exporting #{o["Name"]}"
+      export_canvas_object(o, exported_file.path, opts[:scale_factor], opts[:sharpen], opts[:output])
+    end
+  ensure
+    # File.delete(exported_file.path) if exported_file
+  end
+end
+
+run_script if $0 == __FILE__
