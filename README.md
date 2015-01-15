@@ -9,12 +9,12 @@ Usage details Coming Soon.
         brew tap philc/omnislice
         brew install omnislice --HEAD
 
-    This will install the omnislice utility into /usr/local/bin, and install an AppleScript launcher for
-    omnislice into ~/Library/Scripts/Applications/Omnigraffle 6.
+    This will install the omnislice utility into `/usr/local/bin`, and install an AppleScript launcher for
+    omnislice into `~/Library/Scripts/Applications/Omnigraffle 6`.
 
-* Download and move FastScripts into your Applications folder. This allows you to run Applescripts using
-  Keyboard shortcuts.
-* Make FastScripts run on system startup.
+* Download and move the [FastScripts](http://www.red-sweater.com/fastscripts/) app into your `Applications`
+  folder. This allows you to run the Omnislice script using a keyboard shortcut from within Omnigraffle.
+* Make FastScripts run when your system starts up.
 
     ![](http://i.imgur.com/mWIZMi8.png)
 * Bind a keyboard shortcut to omnislice, e.g. CMD+e (for "export").
