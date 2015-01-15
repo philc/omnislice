@@ -201,7 +201,7 @@ def run_script
       puts parser
       exit
     end
-    parser.on("-o", "--output FILENAME [defaults to name of canvas]") do |v|
+    parser.on("-o", "--output FOLDERNAME [defaults to name of canvas]") do |v|
       opts[:output] = v
     end
     parser.on("-c", "--canvas CANVAS_NAME") do |v|
