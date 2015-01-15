@@ -15,8 +15,8 @@ require "open3"
 
 # Returns the contents of the data.plist file as a JSON map.
 def convert_omni_to_json(path)
-  # Omnigraffles are either directories containing a data.plist + linked image assets, or they are simply a
-  # data.plist. I'm not sure why Omnigraffle decides to use either -- image assets are sometimes base64
+  # Omnigraffle files are either directories containing a data.plist + linked image assets, or they are simply
+  # a data.plist. I'm not sure why Omnigraffle decides to use either -- image assets are sometimes base64
   # encoded inside the data.plist file, rather than being placed in a separate directory.
   data_plist = path
   if File.directory?(path)
@@ -24,12 +24,23 @@ def convert_omni_to_json(path)
     raise "data.plist not found: #{data_plist}" unless File.exists?(data_plist)
   end
   temp = Tempfile.new("omni")
+  temp2 = Tempfile.new("json_plist")
   begin
     # Omnigraffle gzips its plist file.
     `gzcat #{Shellwords.escape(data_plist)} > #{Shellwords.escape(temp.path)}`
-    return JSON.parse(`plist-to-json #{Shellwords.escape(temp.path)}`)
+    # `plutil` comes with Apple's developer tools. http://stackoverflow.com/q/6066350
+    # Note that if Omnigraffle's plist contains a <data></data> block, plutil will fail with this error:
+    # invalid object in plist for destination format
+    # The workaround is to replace <data> blocks with <string>. AFAICT <data> blocks are used to embed some
+    # image data, and removing these blocks won't affect our goal of computing the coordinates of shapes.
+    sanitized_plist = File.read(temp.path).gsub(/<data>.*?<\/data>/m, "<string></string>")
+    File.write(temp.path, sanitized_plist)
+    command = "plutil -convert json #{Shellwords.escape(temp.path)} -o #{Shellwords.escape(temp2.path)}"
+    puts `#{command}`
+    return JSON.parse(File.read(temp2.path))
   ensure
     temp.unlink
+    temp2.unlink
   end
 end
 
@@ -205,7 +216,7 @@ def run_script
     parser.parse!
   end
 
-  abort "You need this: npm install plist-to-json" if `which plist-to-json`.empty?
+  abort "The command `plutil` isn't present." if `which plutil`.empty?
   abort "You need the convert binary from imagemagick. brew install imagemagick" if `which convert`.empty?
 
   omni_file = ARGV[0] || get_current_doc_path
@@ -226,7 +237,7 @@ def run_script
   #    before we do any exporting.
   save_document_via_applescript()
 
-  doc = convert_omni_to_json(omni_file)[0]
+  doc = convert_omni_to_json(omni_file)
 
   # If --canvas was passed, use that canvas. Otherwise use the currently selected canvas in the doc.
   canvas = nil
