@@ -89,12 +89,12 @@ def export_canvas_object(object, image_file, scale_factor, sharpen, output_folde
   output_file = File.join(output_folder, object["Name"] + ".png")
 
   coords_string = "#{w*scale_factor}x#{h*scale_factor}+#{x*scale_factor}+#{y*scale_factor}"
-  # -repage removes the origin information from the image. You want those offsets removed if you're going to
+  # +repage removes the origin information from the image. You want those offsets removed if you're going to
   # combine any of these images into an animated gif.
   # NOTE(philc): This convert command invocation dominates the time spent when exporting each image.
   # Using whole numbers rather than decimals (e.g. 10 rather than 10.0) shaves 10%.
   # Using -extract rather than -crop shaves 50%.
-  command = "convert -extract #{coords_string} #{Shellwords.escape(image_file)} -repage 0x0 " +
+  command = "convert -extract #{coords_string} #{Shellwords.escape(image_file)} +repage " +
             "#{Shellwords.escape(t.path)}"
   puts command
   `#{command}`
