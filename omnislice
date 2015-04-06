@@ -123,6 +123,17 @@ def object_bounds(object)
   float_regex = '(\d+\.?\d*)'
   match = bounds_str.match(/{{#{float_regex}, #{float_regex}}, {#{float_regex}, #{float_regex}}}/)
   x, y, width, height = match[1..4].map(&:to_f)
+
+  name = object["Name"]
+  if !whole?(x) || !whole?(y)
+    log_warning "canvas object \"#{name}\" has non-integer coordinates (x=#{x}, y=#{y}). " +
+                "The exported image may be blurry."
+  end
+  if !whole?(width) || !whole?(height)
+    log_warning "canvas object \"#{name}\" has non-integer dimensions (#{width}x#{height}). " +
+                "It will be exported as #{width.ceil}x#{height.ceil}."
+  end
+
   # Round width and height to whole numbers.
   return [[x, y], [width.ceil, height.ceil]]
 end
