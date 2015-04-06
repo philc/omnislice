@@ -111,14 +111,20 @@ def scale_image(file_path, fraction, sharpen)
   temp
 end
 
+def whole?(x) x.floor == x end
+
+def log_warning(s) STDERR.puts("WARNING: " + s.to_s) end
+
 # - object: an omnigraffle node of this form: { "Bounds": "{{416, 66}, {320, 50}}", ... }
 # Returns [[x, y], [width, height]]
 def object_bounds(object)
   bounds_str = object["Bounds"]
   raise "Object #{object} has no Bounds key." unless bounds_str
-  x, y = (bounds_str.match /{{(\d+), (\d+)}/)[1..2]
-  width, height = (bounds_str.match /{{.+}, {(\d+), (\d+)}}/)[1..2]
-  return [[x.to_f, y.to_f], [width.to_f, height.to_f]]
+  float_regex = '(\d+\.?\d*)'
+  match = bounds_str.match(/{{#{float_regex}, #{float_regex}}, {#{float_regex}, #{float_regex}}}/)
+  x, y, width, height = match[1..4].map(&:to_f)
+  # Round width and height to whole numbers.
+  return [[x, y], [width.ceil, height.ceil]]
 end
 
 def run_applescript(script_contents)
