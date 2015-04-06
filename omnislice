@@ -96,7 +96,6 @@ def export_canvas_object(object, image_file, scale_factor, sharpen, output_folde
   # Using -extract rather than -crop shaves 50%.
   command = "convert -extract #{coords_string} #{Shellwords.escape(image_file)} +repage " +
             "#{Shellwords.escape(t.path)}"
-  puts command
   `#{command}`
   scaled_file = (scale_factor == 1) ? t.path : scale_image(t.path, 1.0 / scale_factor, sharpen)
   FileUtils.mv(scaled_file, output_file)
