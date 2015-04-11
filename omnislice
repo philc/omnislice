@@ -81,7 +81,7 @@ end
 
 # Extracts the coordinates of object, slices that section from image_file, and saves it in output_folder
 # according to the object's name.
-def export_canvas_object(object, image_file, scale_factor, sharpen, output_folder)
+def export_canvas_object(object, image_file, scale_factor, output_folder)
   coords, size = object_bounds(object)
   x, y = coords.map(&:to_i)
   w, h = size.map(&:to_i)
@@ -97,17 +97,8 @@ def export_canvas_object(object, image_file, scale_factor, sharpen, output_folde
   command = "convert -extract #{coords_string} #{Shellwords.escape(image_file)} +repage " +
             "#{Shellwords.escape(t.path)}"
   `#{command}`
-  scaled_file = (scale_factor == 1) ? t.path : scale_image(t.path, 1.0 / scale_factor, sharpen)
-  FileUtils.mv(scaled_file, output_file)
+  FileUtils.mv(t.path, output_file)
   t.unlink
-end
-
-# Scales the image by the given fraction (0.5 is 50%) and returns the temp file of the new scaled image.
-def scale_image(file_path, fraction, sharpen)
-  temp = Tempfile.new("resized")
-  sharp = sharpen ? " -unsharp 0x1" : ""
-  `convert #{Shellwords.escape(file_path)} -resize #{fraction * 100}% #{sharp} #{Shellwords.escape(temp.path)}`
-  temp
 end
 
 def whole?(x) x.floor == x end
@@ -211,7 +202,7 @@ def log(*messages)
 end
 
 def run_script
-  opts = {:scale_factor => 1, :sharpen => false}
+  opts = {:scale_factor => 1}
   OptionParser.new do |parser|
     parser.on("-h", "--help") do
       puts parser
@@ -223,11 +214,8 @@ def run_script
     parser.on("-c", "--canvas CANVAS_NAME") do |v|
       opts[:canvas] = v
     end
-    parser.on("-s", "--scale-factor integer", "How much to scale the images on export") do |v|
+    parser.on("-s", "--scale integer", "How much to scale the images on export. 2 means 200%") do |v|
       opts[:scale_factor] = v.to_i
-    end
-    parser.on(nil, "--[no-]sharpen") do |v|
-      opts[:sharpen] = v
     end
     parser.parse!
   end
@@ -279,9 +267,6 @@ def run_script
     exported_file = File.new(temp_file_path)
 
     log "Exporting Omnigraffle canvas to disk."
-    # NOTE(philc): For image quality reasons, I export my Omnigraffle canvases as 200% images and then resize
-    # them with ImageMagick, which makes the text etc. much sharper than if Omnigraffle exported it at a lower
-    # resolution.
     export_canvas_via_applescript(canvas["SheetTitle"], opts[:scale_factor], exported_file.path)
 
     named_objects = find_named_objects(canvas).sort_by { |o| o["Name"] }
@@ -290,7 +275,7 @@ def run_script
     abort "There are objects with duplicate names: #{dupes.join(",")}" unless dupes.empty?
     named_objects.each do |o|
       log "Exporting #{o["Name"]}"
-      export_canvas_object(o, exported_file.path, opts[:scale_factor], opts[:sharpen], opts[:output])
+      export_canvas_object(o, exported_file.path, opts[:scale_factor], opts[:output])
     end
   ensure
     # File.delete(exported_file.path) if exported_file
