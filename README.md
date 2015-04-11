@@ -28,4 +28,4 @@ Usage details Coming Soon.
 ## Future work
 
 * Render a progress bar when exporting.
-* Expose any errors clearly.
+* Expose errors clearly in a UI.
